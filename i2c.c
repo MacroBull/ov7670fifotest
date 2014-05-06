@@ -1,129 +1,273 @@
-//code adapted from http://www.43oh.com/forum/viewtopic.php?f=9&t=139
-//Kerry D. Wong
-//http://www.kerrywong.com
-#include <msp430.h>
-#include <legacymsp430.h>
+/*
+ * only register operation in master mode implemented
+ */
 
 #include "i2c.h"
-#include "pins.h"
-
-void i2c_init(void)
-{
-    P1DIR |= SCL | SDA; // Set SCL, SDA and LED as Output
-
-    // Set Pull-Ups on SCL and SDA
-    P1REN |= SCL | SDA; 
-    P1OUT |= SCL | SDA;
-
-    // enable SDA, SCL, SCLK, i2c mode, MSB, output enabled, hold in reset
-    USICTL0 = USIPE7 | USIPE6 | USIMST | USIOE | USISWRST;
-
-    // USICTL0 Upper 8bit Register of 16bit USICTL Register
-	// USIPE7   = P1.7 USI Mode, i2c SDA enabled
-	// USIPE6   = P1.6 USI Mode, i2c SCL enabled
-	// USIPE5   = P1.5 USI Mode, i2c Clock Input? (Not Set)
-	// USILSB   = LSB Mode (Not Set = MSB)
-	// USIMST   = Master Mode
-	// USIGE    = Output Latch (Not Set = Clock Controlled)
-	// USIOE    = Data Output Enable
-	// USISWRST = USI Software Reset (Set to allow changing settings)
 
 
-    // SMCLK / 4, and Reverse Clock Polarity
-    USICKCTL = USIDIV_7 + USISSEL_2 + USICKPL;
+/*
+USCI_I2C_info *uart_table;
+char i2c_cnt;
+*/
 
-    // USICKCTL 8bit USI Clock Control Register
-	// USIDIVx  = Clock Divider (Bit7-5, USIDIV_2 = Divide by 4)
-	// USISSELx = Clock Source (For Master Mode, Bit4-2, USISSEL_2 = SMCLK)
-	// USICKPL  = Clock Polarity (0 = Inactive Low, 1 = Inactive High)
-	// USISWCLK = Software Clock State
 
-    // I2C Mode
-    USICTL1 = USII2C;
-
-    // USICTL1 Lower 8bit Register of 16bit USICTL Register
-	// USICKPH   = Clock Phase (0 = Data Changed, then Captured, 1 = Data Captured, then Changed)
-	// USII2C    = I2C mode
-	// USISTTIE  = START condition Interrupt
-	// USIIE     = USI Counter Interrupt
-	// USIAL     = Arbitration Lost Notification
-	// USISTP    = STOP condition Notification
-	// USISTTIFG = START condition Int. Flag
-	// USIIFG    = USI Counter Int. Flag
-
-    // release from reset
-    USICTL0 &= ~USISWRST;
+/*
+ * 
+int uart_register(USCI_I2C_info *table, char cnt){
+	//dev_init();
+	uart_table = table;
+	uart_cnt = cnt;
+	USCI_I2C_RX_ISR_setter(uart_handler);
 }
 
-void i2c_start(void)
-{
-    //P1OUT |= LED;  // Turn P1.0 Led on
+*/
 
-    // Send i2c START condition
-    USISRL = 0x00; // Load USISRL Lower Byte Shift Register MSB with 0 for i2c START
-    USICTL0 |= USIGE | USIOE; // Force Output Latch, And Enable Data Output Bit (High to Low SDA while SCL is High)
-    USICTL0 &= ~USIGE; // Clear Output Latch (Return to Clock Control)
+
+void USCI_I2C_init(USCI_I2C_info *this, uint32_t freq, uint32_t baud, char is_master){ 
+	
+	uint8_t tmp;
+	
+	USCI_I2C_XD_enable(this);
+	//*this->CTL1 |= UCSWRST;
+	*this->CTL1 = UCSWRST + UCSSEL_2;
+	*this->CTL0 = UCMODE_3 + UCSYNC;
+	*this->CTL0 |= is_master << 3;
+	
+	freq = ( freq & 1) + freq / baud;
+	tmp = freq & 0xff;
+	*this->BR0= tmp;
+	tmp = freq >> 8;
+	*this->BR1= tmp;
+	
+	*this->CTL1 &= ~UCSWRST;
 }
 
-void i2c_stop(void)
-{
-	// Prepare i2c STOP condition
-    USICTL0 |= USIOE; // Enable Data Output Bit (Turn SDA into Output)
-    USISRL = 0x00; // Load USISRL Lower Byte Shift Register MSB with 0 for i2c STOP
-    USICNT = 1; // Load USICNT Counter with number of Bits to Send. USIIFG Auto-Cleared
-    // Data TXed by USI I2C
-    while((USICTL1 & USIIFG) != 0x01); // Delay, Wait for USIIFG, Counter down to 0
 
-    // Send i2c STOP condition
-    USISRL = 0xFF; // Load USISRL Lower Byte Shift Register MSB with 1 for i2c STOP
-    USICTL0 |= USIGE; // Force Output Latch (Low to High SDA while SCL is High)
-    USICTL0 &= ~USIOE & ~USIGE ; // Clear Data Output Enable Bit and Output Latch (Release SCL)
+/*
+void USCI_I2C_ISR_setter(USCI_I2C_info *this, USCI_I2C_RX_ISR rx_isr){
 
-    //P1OUT &= ~LED; // Turn P1.0 Led off
+	this->rx_isr = rx_isr;
+	if (NULL != rx_isr) {
+		*this->IE |= this->RXIE;
+		_EINT();
+	}
+	else {
+		*this->IE &= ~(this->RXIE);
+		__bic_SR_register(GIE);
+	}
+	
+}
+*/
+	
+
+inline void USCI_I2C_XD_enable(USCI_I2C_info *this){
+	*this->XD_PORT_SEL |= this->SCL + this->SDA;
+	*this->XD_PORT_SEL2 |= this->SCL + this->SDA;
 }
 
-unsigned char i2c_write8(unsigned char c)
-{
-// TX
-    USICTL0 |= USIOE; // Enable Data Output Bit (Turn SDA into Output)
-    USISRL = c; // Load USISRL Lower Byte Shift Register with 8 Bit data (Byte)
-    USICNT = 8; // Load USICNT Counter with number of Bits to Send. USIIFG Auto-Cleared
-    // Data TXed by USI I2C
-    while((USICTL1 & USIIFG) != 0x01); // Delay, Wait for USIIFG, Counter down to 0
-
-// RX
-    // Data TXed. Ready to Receive (n)ACK from i2c Slave
-    USICTL0 &= ~USIOE; // Clear Data Output Enable Bit (Turn SDA into Input)
-    USICNT = 1; // Load USICNT Counter with number of Bits to Receive. USIIFG Auto-Cleared
-    // Data RXed by USI I2C
-    while((USICTL1 & USIIFG) != 0x01); // Delay, Wait for USIIFG, Counter down to 0
-
-// Return Data
-    c = USISRL; // LSB of USISRL Holds Ack Status of 0 = ACK (0x00) or 1 = NACK (0x01)
-    return c;
+inline void USCI_I2C_XLED_enable(USCI_I2C_info *this){
+	*this->XLED_PORT_DIR |= this->XLED;
 }
 
-unsigned char i2c_read8(unsigned char acknack)
-{
-// RX
-    USICTL0 &= ~USIOE; // Clear Data Output Enable Bit (Turn SDA into Input)
-    USISRL = 0x00; // Clear USISRL Lower Byte Shift Register (Byte)
-    USICNT = 8; // Load USICNT Counter with number of Bits to Receive. USIIFG Auto-Cleared
-    // Data RXed by USI I2C
-    while((USICTL1 & USIIFG) != 0x01); // Delay, Wait for USIIFG, Counter down to 0
-
-// Copy Data to c
-    unsigned char c;
-    c = USISRL; // USISRL Holds Received Data
-
-// TX
-    // Data RXed. Ready to Send (n)ACK to i2c Slave
-    USICTL0 |= USIOE; // Enable Data Output Bit (Turn SDA into Output)
-    USISRL = acknack; // Load USISRL Lower Byte Shift Register MSB with acknack (0x00 = Ack, 0xFF = Nack)
-    USICNT = 1; // Load USICNT Counter with number of Bits to Send. USIIFG Auto-Cleared
-    // Data TXed by USI I2C
-    while((USICTL1 & USIIFG) != 0x01); // Delay, Wait for USIIFG, Counter down to 0
-
-// Return Data
-    return c;
+inline void USCI_I2C_XLED_on(USCI_I2C_info *this){
+	*this->XLED_PORT_OUT |= this->XLED;
 }
+
+inline void USCI_I2C_XLED_off(USCI_I2C_info *this){
+	*this->XLED_PORT_OUT &= ~this->XLED;
+}
+
+inline void USCI_I2C_send_nack(USCI_I2C_info *this){
+	*this->CTL1 |= UCTXNACK;
+	while (*this->CTL1 & UCTXNACK);
+}
+
+inline void USCI_I2C_send_stop(USCI_I2C_info *this){
+	*this->CTL1 |= UCTXSTP;
+	while (*this->CTL1 & UCTXSTP);
+	//while (!(*this->IFG & this->TXIFG));
+}
+
+inline void USCI_I2C_send_start(USCI_I2C_info *this, char is_send){
+	
+	//*this->CTL1 = ( (*this->CTL1) && 0b11000000 ) + (is_send << 4) + UCTXSTT;
+	if (is_send) {
+		*this->CTL1 = ( (*this->CTL1) & 0b11000000 ) + UCTR + UCTXSTT;
+		while (!(*this->IFG & this->TXIFG));
+	}
+	else {
+		*this->CTL1 = ( (*this->CTL1) & 0b11000000 ) + UCTXSTT;
+		while (*this->CTL1 & UCTXSTT);
+	}
+}
+
+inline void USCI_I2C_reset(USCI_I2C_info *this){
+	*this->CTL1 |= UCSWRST;
+}
+
+inline void USCI_I2C_set(USCI_I2C_info *this){
+	*this->CTL1 &= ~UCSWRST;
+}
+
+inline void USCI_I2C_own_addr_setter(USCI_I2C_info *this, uint16_t addr){
+	USCI_I2C_reset(this);
+	*this->OA = 0x80 + addr;
+}
+
+inline void USCI_I2C_slave_addr_setter(USCI_I2C_info *this, uint16_t addr){
+	USCI_I2C_reset(this);
+	*this->SA = addr;
+}
+
+inline void USCI_I2C__write8(USCI_I2C_info *this, char c){
+	
+	USCI_I2C_send_start(this, 1);
+	*this->TXBUF = c;
+	//__bis_SR_register(CPUOFF + GIE);
+	//while (UCB0CTL1 & UCTXSTT); // is OK
+	while (!(*this->IFG & this->TXIFG));
+	USCI_I2C_send_stop(this);
+
+}
+
+inline void USCI_I2C__write16(USCI_I2C_info *this, int n){
+	
+	USCI_I2C_send_start(this, 1);
+	*this->TXBUF = (char)(n >> 8);
+	while (!(*this->IFG & this->TXIFG));
+	*this->TXBUF = (char)(n & 0xff);
+	while (!(*this->IFG & this->TXIFG));
+	USCI_I2C_send_stop(this);
+
+}
+
+inline char USCI_I2C__read8(USCI_I2C_info *this){
+	char r;
+	
+	USCI_I2C_send_start(this, 0);
+	while (!(*this->IFG & this->RXIFG));
+	r = *this->RXBUF;
+	USCI_I2C_send_stop(this);
+	return r;
+}
+
+inline int USCI_I2C__read16(USCI_I2C_info *this){
+	int r;
+	
+	USCI_I2C_send_start(this, 0);
+	while (!(*this->IFG & this->RXIFG));
+	r = *this->RXBUF;
+	r = r << 8;
+	while (!(*this->IFG & this->RXIFG));
+	r += *this->RXBUF;
+	USCI_I2C_send_stop(this);
+	return r;
+}
+
+void USCI_I2C_write(USCI_I2C_info *this,  char *data, uint16_t cnt){
+	char *p;
+	
+	USCI_I2C_XLED_on(this);
+	
+	p = data + cnt - 1;
+	USCI_I2C_send_start(this, 1);
+	while (p>=data){
+		*this->TXBUF = *p;
+		p--;
+		while (!(*this->IFG & this->TXIFG));
+	}
+	
+	USCI_I2C_send_stop(this);
+	
+	USCI_I2C_XLED_off(this);
+
+}
+
+char *USCI_I2C_read(USCI_I2C_info *this, char *buf, uint16_t max_cnt){
+	char *p = buf + max_cnt;
+	
+	USCI_I2C_XLED_on(this);
+	USCI_I2C_send_start(this, 0);
+	
+	while ((p>buf)&&(*this->STAT & UCNACKIFG)){ // UCNACKIFG not work for this??? it works~~~ but as bellow
+		p--;
+		while (!(*this->IFG & this->RXIFG));
+		*p = *this->RXBUF;
+	}
+	/* one buffer before NACK */
+	p--;
+	while (!(*this->IFG & this->RXIFG));
+	*p = *this->RXBUF;
+	
+	USCI_I2C_send_stop(this);
+	USCI_I2C_XLED_off(this);
+	
+	return p;
+	
+}
+
+
+char USCI_I2C_reg8_read8(USCI_I2C_info *this, char addr){ // no delay...
+	char r;
+	
+	USCI_I2C_XLED_on(this);
+	
+	USCI_I2C__write8(this, addr);
+	r = USCI_I2C__read8(this);
+	
+	USCI_I2C_XLED_off(this);
+	return  r;
+}
+
+int USCI_I2C_reg8_read16(USCI_I2C_info *this, char addr){ // no delay...
+	int r;
+	USCI_I2C_XLED_on(this);
+	
+	USCI_I2C__write8(this, addr);
+	r = USCI_I2C__read16(this);
+	USCI_I2C_XLED_off(this);
+	
+	return r;
+}
+
+void USCI_I2C_reg8_write8(USCI_I2C_info *this, char addr, char val){
+	
+	USCI_I2C_XLED_on(this);
+	
+	USCI_I2C_send_start(this, 1);
+	*this->TXBUF = addr;
+	while (!(*this->IFG & this->TXIFG));
+	*this->TXBUF = val;
+	while (!(*this->IFG & this->TXIFG));
+	USCI_I2C_send_stop(this);
+	
+	USCI_I2C_XLED_off(this);
+}
+
+void USCI_I2C_reg8_write16(USCI_I2C_info *this, char addr, int val){
+	
+	USCI_I2C_XLED_on(this);
+	
+	USCI_I2C_send_start(this, 1);
+	*this->TXBUF = addr;
+	while (!(*this->IFG & this->TXIFG));
+	*this->TXBUF = (char)(val >> 8);
+	while (!(*this->IFG & this->TXIFG));
+	*this->TXBUF = (char)(val & 0xff);
+	while (!(*this->IFG & this->TXIFG));
+	USCI_I2C_send_stop(this);
+	
+	USCI_I2C_XLED_off(this);
+}
+
+/*
+char USCI_I2C_reg16_read8(USCI_I2C_info *this, char addr){ // no delay...
+	USCI_I2C__write8(this, addr);
+	return USCI_I2C__read8(this);
+}
+
+int USCI_I2C_reg16_read16(USCI_I2C_info *this, char addr){ // no delay...
+	USCI_I2C__write8(this, addr);
+	return USCI_I2C__read16(this);
+}
+*/

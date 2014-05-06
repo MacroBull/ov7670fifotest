@@ -1,21 +1,28 @@
-#include "ov7670.h"
 
-void OV7670_write_frame(){
-	
-    /* Capture frame */
-    while ((P1IN & VSYNC));     // wait for an old frame to end
-    while (!(P1IN & VSYNC));    // wait for a new frame to start
-    //P1OUT |= WEN;               // enable writing to fifo
-	
-	P1OUT &= ~WE;
-    while ((P1IN & VSYNC));     // wait for the current frame to end
-	
-    //P1OUT &= ~WEN;              // disable writing to fifo
-	P1OUT |= WE;
-    
+#include <msp430.h>
+#include "dev.h"
+#include "ov7670.h"
+#include "misc.h"
+#include "i2c.h"
+#include "uart.h"
+#include "qput.h"
+
+
+#define VSYNC   BIT0 // P1.0
+#define RRST    BIT3 // P1.3 (note: on launchpad P1.3 has a debouncing cap)
+#define RCK    BIT4 // P1.4
+#define WE     BIT5 // P1.5
+
+//#include "ov7670.c"
+#include "al422b.c"
+
+
+void puti(int i){
+	qputc(_USCI_UART0, i >> 8);
+	qputc(_USCI_UART0, i & 0xff);
 }
 
-void OV7670_check_version(){
+void init_rgb565_qvga_25fps_new(){
 	
 	char tmp0, tmp1;
 	tmp0 = USCI_I2C_reg8_read8(_USCI_I2C0, OV_PID);
@@ -25,11 +32,6 @@ void OV7670_check_version(){
 	qputh(_USCI_UART0, tmp0);
 	qputh(_USCI_UART0, tmp1);
 	qputs(_USCI_UART0, ";\n");
-
-}
-
-
-void init_rgb565_qvga_25fps_new(){
 	
 	
 	USCI_I2C_reg8_write8(_USCI_I2C0, 0x12, 0x80);
@@ -231,4 +233,66 @@ void OV_init(){
 
 	
 	qputs(_USCI_UART0, "Init done!\n");
+}
+
+
+void ov7670_capture(){
+	
+    /* Capture frame */
+    while ((P1IN & VSYNC));     // wait for an old frame to end
+    while (!(P1IN & VSYNC));    // wait for a new frame to start
+    P1OUT |= WE;               // enable writing to fifo
+	//P1OUT &= ~WE;
+    while ((P1IN & VSYNC));     // wait for the current frame to end
+    P1OUT &= ~WE;              // disable writing to fifo
+	//P1OUT |= WE;
+    __delay_cycles(1600000);
+    P1OUT |= RRST;
+}
+
+
+
+void main(){
+	
+	WDT_disable;
+
+	#define FCPU 16000000
+	BC16MSET;
+	
+	//P1DIR |= WE + RRST + RCK;
+	P1DIR |= WE + RRST + RCK;
+    P1DIR &= ~VSYNC;
+	P2SEL = P2SEL2 = 0;
+    P2DIR = 0;
+
+    P1OUT |= RRST;
+    P1OUT &= ~RCK;
+	
+	USCI_UART_init(_USCI_UART0, FCPU, 115200);
+	qputs(_USCI_UART0, "Init...\n");
+	
+	//USCI_I2C_XLED_enable(_USCI_I2C0);
+	USCI_I2C_slave_addr_setter(_USCI_I2C0, 0x21); 
+	USCI_I2C_init(_USCI_I2C0, FCPU, 400000, 1);
+	
+	//init_rgb565_qvga_25fps_new();
+	OV_init();
+	
+	int i,j,k;
+	uint32_t l;
+	
+	while (1){
+		qputs(_USCI_UART0, "Capture!\n");
+		ov7670_capture();
+		qputs(_USCI_UART0, "Captured, read;\n");
+		AL422_read_reset();
+		for (i = 0;i<120;i++){
+		for (l = 0;l<320;l++){
+			qputc(_USCI_UART0,AL422_read_byte());
+		}
+		}
+		//qputs(_USCI_UART0, "\n");
+		__delay_cycles(8000000);
+		
+	}
 }
